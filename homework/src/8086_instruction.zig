@@ -113,6 +113,12 @@ pub const ByteOrWord = union(enum) {
         return .{ .word = @as(u16, hiByte) << 8 | loByte };
     }
 
+    pub fn toU16(s: ByteOrWord) u16 {
+        return switch (s) {
+            inline else => |v| @as(u16, v),
+        };
+    }
+
     pub fn format(s: ByteOrWord, w: *std.Io.Writer) !void {
         try switch (s) {
             inline else => |v| w.print("{b}", .{v}),
