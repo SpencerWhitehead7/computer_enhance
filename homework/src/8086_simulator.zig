@@ -55,6 +55,7 @@ const Simulator = struct {
         var sMut = s;
         const instruction = instr.Instruction.fromInstructionStream(sMut.instructionStream[sMut.i..]);
         switch (instruction) {
+            .movRsmToFromRsm => |i| sMut.movRsmToFromRsm(i),
             .movImmToReg => |i| sMut.movImmToReg(i),
             inline else => {
                 std.debug.print("instruction not supported:: {f}\n", .{instruction});
@@ -68,6 +69,23 @@ const Simulator = struct {
             sMut
         else
             sMut._execute();
+    }
+
+    fn getRegister(s: *const Simulator, r: instr.Register) u16 {
+        return switch (r) {
+            .ax => s.ax,
+            .bx => s.bx,
+            .cx => s.cx,
+            .dx => s.dx,
+            .bp => s.bp,
+            .di => s.di,
+            .si => s.si,
+            .sp => s.sp,
+            inline else => {
+                std.debug.print("byte registers not supported:: {f}\n", .{r});
+                unreachable;
+            },
+        };
     }
 
     fn setRegister(s: *Simulator, r: instr.Register, v: u16) void {
@@ -87,7 +105,23 @@ const Simulator = struct {
         }
     }
 
-    // movRsmToFromRsm
+    fn movRsmToFromRsm(s: *Simulator, i: instr.MovRsmToFromRsm) void {
+        switch (i.dst) {
+            .reg => |dst| {
+                switch (i.src) {
+                    .reg => |src| s.setRegister(dst, s.getRegister(src)),
+                    .mem => |src| {
+                        std.debug.print("memory srcs not supported (yet):: {f}\n", .{src});
+                        unreachable;
+                    },
+                }
+            },
+            .mem => |src| {
+                std.debug.print("memory dsts not supported (yet):: {f}\n", .{src});
+                unreachable;
+            },
+        }
+    }
     // movImmToRsm
     fn movImmToReg(s: *Simulator, i: instr.MovImmToReg) void {
         s.setRegister(i.dst, i.src.toU16());
@@ -110,4 +144,18 @@ test "listing_0043_immediate_movs" {
     try std.testing.expectEqual(6, finalSim.bp);
     try std.testing.expectEqual(7, finalSim.si);
     try std.testing.expectEqual(8, finalSim.di);
+}
+
+test "listing_0044_register_movs" {
+    const sim: Simulator = .{};
+    const finalSim = sim.execute(&[_]u8{ 184, 1, 0, 187, 2, 0, 185, 3, 0, 186, 4, 0, 137, 196, 137, 221, 137, 206, 137, 215, 137, 226, 137, 233, 137, 243, 137, 248 });
+
+    try std.testing.expectEqual(4, finalSim.ax);
+    try std.testing.expectEqual(3, finalSim.bx);
+    try std.testing.expectEqual(2, finalSim.cx);
+    try std.testing.expectEqual(1, finalSim.dx);
+    try std.testing.expectEqual(1, finalSim.sp);
+    try std.testing.expectEqual(2, finalSim.bp);
+    try std.testing.expectEqual(3, finalSim.si);
+    try std.testing.expectEqual(4, finalSim.di);
 }
