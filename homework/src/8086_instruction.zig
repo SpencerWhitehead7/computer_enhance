@@ -136,6 +136,13 @@ pub const ByteOrWord = union(enum) {
         };
     }
 
+    fn widthLabel(s: ByteOrWord) *const [4:0]u8 {
+        return switch (s) {
+            .byte => "byte",
+            .word => "word",
+        };
+    }
+
     fn offset(s: ByteOrWord) u8 {
         return switch (s) {
             .byte => 1,
@@ -328,6 +335,94 @@ pub const Instruction = union(enum) {
     }
 };
 
+// =================== PARSERS ===================
+
+fn parseRsmAndRsm(instructionStream: []const u8) struct { RegisterOrMemory, RegisterOrMemory, u8 } {
+    const b0 = instructionStream[0];
+    const d: u1 = @intCast(b0 >> 1 & 1);
+    const w: u1 = @intCast(b0 >> 0 & 1);
+
+    const b1 = instructionStream[1];
+    const mod: u2 = @intCast(b1 >> 6 & 0b11);
+    const reg: u3 = @intCast(b1 >> 3 & 0b111);
+    const rsm: u3 = @intCast(b1 >> 0 & 0b111);
+
+    const disp = switch (mod) {
+        0b00 => switch (rsm) {
+            // special case (direct address with 16 bit displacement)
+            0b110 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+            else => null,
+        },
+        0b01 => ByteOrWord.initByte(instructionStream[2]),
+        0b10 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+        0b11 => null,
+    };
+    const dispOffset: u8 = if (disp) |v| v.offset() else 0;
+
+    const register = RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][reg] };
+    const registerOrMemory = switch (mod) {
+        0b11 => RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][rsm] },
+        else => RegisterOrMemory{ .mem = Memory.init(mod, rsm, disp) },
+    };
+    const dst, const src = switch (d) {
+        0 => .{ registerOrMemory, register },
+        1 => .{ register, registerOrMemory },
+    };
+    const offset = 2 + dispOffset;
+
+    return .{ dst, src, offset };
+}
+
+fn parseImmAndRsm(instructionStream: []const u8) struct { RegisterOrMemory, ByteOrWord, u8 } {
+    const b0 = instructionStream[0];
+    const s: u1 = @intCast(b0 >> 1 & 0b1);
+    const w: u1 = @intCast(b0 >> 0 & 0b1);
+
+    const b1 = instructionStream[1];
+    const mod: u2 = @intCast(b1 >> 6 & 0b11);
+    const rsm: u3 = @intCast(b1 >> 0 & 0b111);
+
+    const disp = switch (mod) {
+        0b00 => switch (rsm) {
+            // special case (direct address with 16 bit displacement)
+            0b110 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+            else => null,
+        },
+        0b01 => ByteOrWord.initByte(instructionStream[2]),
+        0b10 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+        0b11 => null,
+    };
+    const dispOffset: u8 = if (disp) |v| v.offset() else 0;
+
+    const dst = switch (mod) {
+        0b11 => RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][rsm] },
+        else => RegisterOrMemory{ .mem = Memory.init(mod, rsm, disp) },
+    };
+    const src, const srcOffset: u8 = switch (w) {
+        0 => .{ ByteOrWord.initByte(instructionStream[2 + dispOffset]), 1 },
+        1 => switch (s) {
+            0 => .{ ByteOrWord.initWord(instructionStream[2 + dispOffset], instructionStream[3 + dispOffset]), 2 },
+            1 => .{ ByteOrWord.initWord(instructionStream[2 + dispOffset], 0), 1 },
+        },
+    };
+    const offset = 2 + dispOffset + srcOffset;
+
+    return .{ dst, src, offset };
+}
+
+fn parseImmAndAcc(instructionStream: []const u8) struct { Register, ByteOrWord, u8 } {
+    const b0 = instructionStream[0];
+    const w: u1 = @intCast(b0 >> 0 & 0b1);
+
+    const dst, const src = switch (w) {
+        0 => .{ Register.al, ByteOrWord.initByte(instructionStream[1]) },
+        1 => .{ Register.ax, ByteOrWord.initWord(instructionStream[1], instructionStream[2]) },
+    };
+    const offset = 1 + src.offset();
+
+    return .{ dst, src, offset };
+}
+
 // =================== MOV = Move: ===================
 
 pub const MovRsmToFromRsm = struct {
@@ -336,46 +431,8 @@ pub const MovRsmToFromRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) MovRsmToFromRsm {
-        const b0 = instructionStream[0];
-        const d: u1 = @intCast(b0 >> 1 & 1);
-        const w: u1 = @intCast(b0 >> 0 & 1);
-
-        const b1 = instructionStream[1];
-        const mod: u2 = @intCast(b1 >> 6 & 0b11);
-        const reg: u3 = @intCast(b1 >> 3 & 0b111);
-        const rsm: u3 = @intCast(b1 >> 0 & 0b111);
-
-        const disp = switch (mod) {
-            0b00 => switch (rsm) {
-                // special case (direct address with 16 bit displacement)
-                0b110 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
-                else => null,
-            },
-            0b01 => ByteOrWord.initByte(instructionStream[2]),
-            0b10 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
-            0b11 => null,
-        };
-        const dispOffset: u8 = if (disp) |v| v.offset() else 0;
-
-        const registerField = RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][reg] };
-        const registerOrMemoryField = switch (mod) {
-            0b11 => RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][rsm] },
-            else => RegisterOrMemory{ .mem = Memory.init(mod, rsm, disp) },
-        };
-        const offset = 2 + dispOffset;
-
-        return switch (d) {
-            0 => .{
-                .dst = registerOrMemoryField,
-                .src = registerField,
-                .offset = offset,
-            },
-            1 => .{
-                .dst = registerField,
-                .src = registerOrMemoryField,
-                .offset = offset,
-            },
-        };
+        const dst, const src, const offset = parseRsmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const MovRsmToFromRsm, w: *std.Io.Writer) !void {
@@ -422,8 +479,8 @@ pub const AddRsmToFromRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) AddRsmToFromRsm {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseRsmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const AddRsmToFromRsm, w: *std.Io.Writer) !void {
@@ -436,13 +493,15 @@ pub const AddImmToRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) AddImmToRsm {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const AddImmToRsm, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try switch (s.dst) {
+            .reg => w.print("add {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) }),
+            .mem => w.print("add {s} {f}, {f}", .{ s.src.widthLabel(), s.dst, std.fmt.alt(s.src, .formatSigned) }),
+        };
     }
 };
 pub const AddImmToAcc = struct {
@@ -451,13 +510,12 @@ pub const AddImmToAcc = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) AddImmToAcc {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndAcc(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const AddImmToAcc, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try w.print("add {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) });
     }
 };
 
@@ -469,13 +527,12 @@ pub const SubRsmToFromRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) SubRsmToFromRsm {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseRsmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const SubRsmToFromRsm, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try w.print("sub {f}, {f}", .{ s.dst, s.src });
     }
 };
 pub const SubImmFromRsm = struct {
@@ -484,13 +541,15 @@ pub const SubImmFromRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) SubImmFromRsm {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const SubImmFromRsm, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try switch (s.dst) {
+            .reg => w.print("sub {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) }),
+            .mem => w.print("sub {s} {f}, {f}", .{ s.src.widthLabel(), s.dst, std.fmt.alt(s.src, .formatSigned) }),
+        };
     }
 };
 pub const SubImmFromAcc = struct {
@@ -499,13 +558,12 @@ pub const SubImmFromAcc = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) SubImmFromAcc {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndAcc(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const SubImmFromAcc, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try w.print("sub {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) });
     }
 };
 
@@ -517,13 +575,12 @@ pub const CmpRsmAndR = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) CmpRsmAndR {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseRsmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const CmpRsmAndR, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try w.print("cmp {f}, {f}", .{ s.dst, s.src });
     }
 };
 pub const CmpImmWithRsm = struct {
@@ -532,13 +589,15 @@ pub const CmpImmWithRsm = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) CmpImmWithRsm {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndRsm(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const CmpImmWithRsm, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try switch (s.dst) {
+            .reg => w.print("cmp {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) }),
+            .mem => w.print("cmp {s} {f}, {f}", .{ s.src.widthLabel(), s.dst, std.fmt.alt(s.src, .formatSigned) }),
+        };
     }
 };
 pub const CmpImmWithAcc = struct {
@@ -547,13 +606,12 @@ pub const CmpImmWithAcc = struct {
     offset: u8,
 
     pub fn fromInstructionStream(instructionStream: []const u8) CmpImmWithAcc {
-        _ = instructionStream; // autofix
-        return undefined;
+        const dst, const src, const offset = parseImmAndAcc(instructionStream);
+        return .{ .dst = dst, .src = src, .offset = offset };
     }
 
     pub fn format(s: *const CmpImmWithAcc, w: *std.Io.Writer) !void {
-        _ = s; // autofix
-        try w.print("", .{});
+        try w.print("cmp {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) });
     }
 };
 
