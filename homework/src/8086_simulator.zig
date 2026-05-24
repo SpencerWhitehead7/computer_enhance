@@ -4,7 +4,7 @@ const instr = @import("./8086_instruction.zig");
 
 const Simulator = struct {
     instructionStream: []const u8 = &.{},
-    i: u64 = 0,
+    ip: u16 = 0,
 
     ax: u16 = 0,
     bx: u16 = 0,
@@ -22,7 +22,7 @@ const Simulator = struct {
     pub fn format(s: Simulator, w: *std.Io.Writer) !void {
         try w.writeAll("Simulator{\n");
         try w.print("  instructionStream: {d} {any}\n", .{ s.instructionStream.len, s.instructionStream });
-        try w.print("  i: {}\n", .{s.i});
+        try w.print("  ip: {}\n", .{s.ip});
         try w.print("  ax: {}\n", .{s.ax});
         try w.print("  bx: {}\n", .{s.bx});
         try w.print("  cx: {}\n", .{s.cx});
@@ -37,7 +37,7 @@ const Simulator = struct {
     }
 
     fn diff(s: *Simulator, other: Simulator, w: *std.Io.Writer) !void {
-        if (s.i != other.i) try w.print("i: {} -> {}\n", .{ s.i, other.i });
+        if (s.ip != other.ip) try w.print("ip: {} -> {}\n", .{ s.ip, other.ip });
         if (s.ax != other.ax) try w.print("ax: {} -> {}\n", .{ s.ax, other.ax });
         if (s.bx != other.bx) try w.print("bx: {} -> {}\n", .{ s.bx, other.bx });
         if (s.cx != other.cx) try w.print("cx: {} -> {}\n", .{ s.cx, other.cx });
@@ -53,14 +53,17 @@ const Simulator = struct {
     pub fn execute(s: Simulator, instructionStream: []const u8) Simulator {
         var sMut = s;
         sMut.instructionStream = instructionStream;
-        sMut.i = 0;
+        sMut.ip = 0;
 
         return sMut._execute();
     }
 
     fn _execute(s: Simulator) Simulator {
         var sMut = s;
-        const instruction = instr.Instruction.fromInstructionStream(sMut.instructionStream[sMut.i..]);
+        const instruction = instr.Instruction.fromInstructionStream(sMut.instructionStream[sMut.ip..]);
+
+        sMut.ip += instruction.offset();
+
         switch (instruction) {
             .movRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .mov = i }),
             .movImmToReg => |i| sMut.movImmToReg(i),
@@ -74,15 +77,15 @@ const Simulator = struct {
             .cmpRsmAndR => |i| sMut.rsmAndRsm(.{ .cmp = i }),
             .cmpImmWithRsm => |i| sMut.immAndRsm(.{ .cmp = i }),
 
+            .retJne => |i| sMut.retJne(i),
+
             inline else => {
                 std.debug.print("instruction not supported:: {f}\n", .{instruction});
                 unreachable;
             },
         }
 
-        sMut.i += instruction.offset();
-
-        return if (sMut.i == sMut.instructionStream.len)
+        return if (sMut.ip == sMut.instructionStream.len)
             sMut
         else
             sMut._execute();
@@ -231,6 +234,17 @@ const Simulator = struct {
     // movAccToMem
     // movRsmToSegR
     // movSegRToRsm
+
+    fn retJne(s: *Simulator, i: instr.RetJne) void {
+        if (s.getZF()) {
+            return;
+        }
+
+        if (i.ipinc8 >= 0)
+            s.ip += @intCast(i.ipinc8)
+        else
+            s.ip -= @abs(i.ipinc8);
+    }
 };
 
 const RsmAndRsm = union(enum) {
@@ -308,4 +322,27 @@ test "listing_0046_add_sub_cmp" {
     try std.testing.expectEqual(998, finalSim.sp);
     try std.testing.expectEqual(false, finalSim.getSF());
     try std.testing.expectEqual(true, finalSim.getZF());
+}
+
+test "listing_0048_ip_register" {
+    const sim = Simulator{};
+    const iStream = [_]u8{ 185, 200, 0, 137, 203, 129, 193, 232, 3, 187, 208, 7, 41, 217 };
+    const finalSim = sim.execute(&iStream);
+
+    try std.testing.expectEqual(2000, finalSim.bx);
+    try std.testing.expectEqual(64736, finalSim.cx);
+    try std.testing.expectEqual(iStream.len, finalSim.ip);
+    try std.testing.expect(finalSim.getSF());
+    try std.testing.expect(!finalSim.getZF());
+}
+
+test "listing_0049_conditional_jumps" {
+    const sim = Simulator{};
+    const iStream = [_]u8{ 185, 3, 0, 187, 232, 3, 131, 195, 10, 131, 233, 1, 117, 248 };
+    const finalSim = sim.execute(&iStream);
+
+    try std.testing.expectEqual(1030, finalSim.bx);
+    try std.testing.expectEqual(iStream.len, finalSim.ip);
+    try std.testing.expect(!finalSim.getSF());
+    try std.testing.expect(finalSim.getZF());
 }
