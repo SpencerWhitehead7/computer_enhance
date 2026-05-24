@@ -16,6 +16,9 @@ const Simulator = struct {
     si: u16 = 0,
     sp: u16 = 0,
 
+    flags: u16 = 0b0000_0000_0000_0000,
+    // 0,0,0,0 - OF,DF,IF,TF _ SF,ZF,0,AF _ 0,PF,0,CF
+
     pub fn format(s: Simulator, w: *std.Io.Writer) !void {
         try w.writeAll("Simulator{\n");
         try w.print("  instructionStream: {d} {any}\n", .{ s.instructionStream.len, s.instructionStream });
@@ -28,6 +31,8 @@ const Simulator = struct {
         try w.print("  di: {}\n", .{s.di});
         try w.print("  si: {}\n", .{s.si});
         try w.print("  sp: {}\n", .{s.sp});
+        try w.print("  SF: {}\n", .{s.getSF()});
+        try w.print("  ZF: {}\n", .{s.getZF()});
         try w.writeAll("}\n");
     }
 
@@ -41,6 +46,8 @@ const Simulator = struct {
         if (s.di != other.di) try w.print("di: {} -> {}\n", .{ s.di, other.di });
         if (s.si != other.si) try w.print("si: {} -> {}\n", .{ s.si, other.si });
         if (s.sp != other.sp) try w.print("sp: {} -> {}\n", .{ s.sp, other.sp });
+        if (s.getSF() != other.getSF()) try w.print("SF: {} -> {}\n", .{ s.getSF(), other.getSF() });
+        if (s.getZF() != other.getZF()) try w.print("ZF: {} -> {}\n", .{ s.getZF(), other.getZF() });
     }
 
     pub fn execute(s: Simulator, instructionStream: []const u8) Simulator {
@@ -55,8 +62,18 @@ const Simulator = struct {
         var sMut = s;
         const instruction = instr.Instruction.fromInstructionStream(sMut.instructionStream[sMut.i..]);
         switch (instruction) {
-            .movRsmToFromRsm => |i| sMut.movRsmToFromRsm(i),
+            .movRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .mov = i }),
             .movImmToReg => |i| sMut.movImmToReg(i),
+
+            .addRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .add = i }),
+            .addImmToRsm => |i| sMut.immAndRsm(.{ .add = i }),
+
+            .subRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .sub = i }),
+            .subImmFromRsm => |i| sMut.immAndRsm(.{ .sub = i }),
+
+            .cmpRsmAndR => |i| sMut.rsmAndRsm(.{ .cmp = i }),
+            .cmpImmWithRsm => |i| sMut.immAndRsm(.{ .cmp = i }),
+
             inline else => {
                 std.debug.print("instruction not supported:: {f}\n", .{instruction});
                 unreachable;
@@ -105,24 +122,108 @@ const Simulator = struct {
         }
     }
 
-    fn movRsmToFromRsm(s: *Simulator, i: instr.MovRsmToFromRsm) void {
-        switch (i.dst) {
+    fn getZF(s: *const Simulator) bool {
+        return (s.flags >> 6 & 1) > 0;
+    }
+    fn setZF(s: *Simulator, v: u16) void {
+        const mask: u16 = 1 << 6;
+
+        if (v == 0)
+            s.flags |= mask
+        else
+            s.flags &= ~mask;
+    }
+    fn getSF(s: *const Simulator) bool {
+        return (s.flags >> 7 & 1) > 0;
+    }
+    fn setSF(s: *Simulator, v: u16) void {
+        const mask: u16 = 1 << 7;
+
+        if ((v & (1 << 15)) > 0)
+            s.flags |= mask
+        else
+            s.flags &= ~mask;
+    }
+
+    fn rsmAndRsm(s: *Simulator, i: RsmAndRsm) void {
+        const result = blk: switch (i.dst()) {
             .reg => |dst| {
-                switch (i.src) {
-                    .reg => |src| s.setRegister(dst, s.getRegister(src)),
+                switch (i.src()) {
+                    .reg => |src| {
+                        const dstVal = s.getRegister(dst);
+                        const srcVal = s.getRegister(src);
+
+                        switch (i) {
+                            .mov => {
+                                s.setRegister(dst, srcVal);
+                                break :blk null;
+                            },
+                            .add => {
+                                const result = dstVal +% srcVal;
+                                s.setRegister(dst, result);
+                                break :blk result;
+                            },
+                            .sub => {
+                                const result = dstVal -% srcVal;
+                                s.setRegister(dst, result);
+                                break :blk result;
+                            },
+                            .cmp => break :blk dstVal -% srcVal,
+                        }
+                    },
                     .mem => |src| {
                         std.debug.print("memory srcs not supported (yet):: {f}\n", .{src});
                         unreachable;
                     },
                 }
             },
-            .mem => |src| {
-                std.debug.print("memory dsts not supported (yet):: {f}\n", .{src});
+            .mem => |dst| {
+                std.debug.print("memory dsts not supported (yet):: {f}\n", .{dst});
                 unreachable;
             },
+        };
+
+        if (result) |r| {
+            s.setSF(r);
+            s.setZF(r);
         }
     }
-    // movImmToRsm
+
+    fn immAndRsm(s: *Simulator, i: ImmAndRsm) void {
+        const result = blk: switch (i.dst()) {
+            .reg => |dst| {
+                const dstVal = s.getRegister(dst);
+                const srcVal = i.src().toU16();
+
+                switch (i) {
+                    // .mov => {
+                    //     break :blk null;
+                    // },
+                    .add => {
+                        const result = dstVal +% srcVal;
+                        s.setRegister(dst, result);
+                        break :blk result;
+                    },
+                    .sub => {
+                        const result = dstVal -% srcVal;
+                        s.setRegister(dst, result);
+                        break :blk result;
+                    },
+                    .cmp => break :blk dstVal -% srcVal,
+                }
+            },
+            .mem => |dst| {
+                std.debug.print("memory dsts not supported (yet):: {f}\n", .{dst});
+                unreachable;
+            },
+        };
+
+        // if (result) |r| {
+        s.setSF(result);
+        s.setZF(result);
+        // }
+    }
+
     fn movImmToReg(s: *Simulator, i: instr.MovImmToReg) void {
         s.setRegister(i.dst, i.src.toU16());
     }
@@ -130,6 +231,44 @@ const Simulator = struct {
     // movAccToMem
     // movRsmToSegR
     // movSegRToRsm
+};
+
+const RsmAndRsm = union(enum) {
+    mov: instr.MovRsmToFromRsm,
+    add: instr.AddRsmToFromRsm,
+    sub: instr.SubRsmToFromRsm,
+    cmp: instr.CmpRsmAndR,
+
+    fn dst(s: RsmAndRsm) instr.RegisterOrMemory {
+        return switch (s) {
+            inline else => |i| i.dst,
+        };
+    }
+
+    fn src(s: RsmAndRsm) instr.RegisterOrMemory {
+        return switch (s) {
+            inline else => |i| i.src,
+        };
+    }
+};
+
+const ImmAndRsm = union(enum) {
+    // mov: instr.MovImmToRsm,
+    add: instr.AddImmToRsm,
+    sub: instr.SubImmFromRsm,
+    cmp: instr.CmpImmWithRsm,
+
+    fn dst(s: ImmAndRsm) instr.RegisterOrMemory {
+        return switch (s) {
+            inline else => |i| i.dst,
+        };
+    }
+
+    fn src(s: ImmAndRsm) instr.ByteOrWord {
+        return switch (s) {
+            inline else => |i| i.src,
+        };
+    }
 };
 
 test "listing_0043_immediate_movs" {
@@ -158,4 +297,15 @@ test "listing_0044_register_movs" {
     try std.testing.expectEqual(2, finalSim.bp);
     try std.testing.expectEqual(3, finalSim.si);
     try std.testing.expectEqual(4, finalSim.di);
+}
+
+test "listing_0046_add_sub_cmp" {
+    const sim: Simulator = .{};
+    const finalSim = sim.execute(&[_]u8{ 187, 3, 240, 185, 1, 15, 41, 203, 188, 230, 3, 189, 231, 3, 57, 229, 129, 197, 3, 4, 129, 237, 234, 7 });
+
+    try std.testing.expectEqual(57602, finalSim.bx);
+    try std.testing.expectEqual(3841, finalSim.cx);
+    try std.testing.expectEqual(998, finalSim.sp);
+    try std.testing.expectEqual(false, finalSim.getSF());
+    try std.testing.expectEqual(true, finalSim.getZF());
 }
