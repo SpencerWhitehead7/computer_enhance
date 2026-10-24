@@ -106,41 +106,40 @@ test "listing_0039_more_movs" {
     try std.testing.expectEqualStrings(expected, actual);
 }
 
-// TODO, someday
-// test "listing_0040_challenge_movs" {
-//     const a = std.testing.allocator;
-//     const instructionStream = [_]u8{ 139, 65, 219, 137, 140, 212, 254, 139, 87, 224, 198, 3, 7, 199, 133, 133, 3, 91, 1, 139, 46, 5, 0, 139, 30, 130, 13, 161, 251, 9, 161, 16, 0, 163, 250, 9, 163, 15, 0 };
-//     const actual = try decode(a, &instructionStream);
-//     defer a.free(actual);
+test "listing_0040_challenge_movs" {
+    const a = std.testing.allocator;
+    const instructionStream = [_]u8{ 139, 65, 219, 137, 140, 212, 254, 139, 87, 224, 198, 3, 7, 199, 133, 133, 3, 91, 1, 139, 46, 5, 0, 139, 30, 130, 13, 161, 251, 9, 161, 16, 0, 163, 250, 9, 163, 15, 0 };
+    const actual = try decode(a, &instructionStream);
+    defer a.free(actual);
 
-//     const expected =
-//         \\bits 16
-//         \\
-//         \\; Signed displacements
-//         \\mov ax, [bx + di - 37]
-//         \\mov [si - 300], cx
-//         \\mov dx, [bx - 32]
-//         \\
-//         \\; Explicit sizes
-//         \\mov [bp + di], byte 7
-//         \\mov [di + 901], word 347
-//         \\
-//         \\; Direct address
-//         \\mov bp, [5]
-//         \\mov bx, [3458]
-//         \\
-//         \\; Memory-to-accumulator test
-//         \\mov ax, [2555]
-//         \\mov ax, [16]
-//         \\
-//         \\; Accumulator-to-memory test
-//         \\mov [2554], ax
-//         \\mov [15], ax
-//         \\
-//     ;
+    const expected =
+        \\bits 16
+        \\
+        // Signed displacements
+        \\mov ax, [bx + di - 37]
+        \\mov [si - 300], cx
+        \\mov dx, [bx - 32]
+        //
+        // Explicit sizes
+        \\mov [bp + di], byte 7
+        \\mov [di + 901], word 347
+        //
+        // Direct address
+        \\mov bp, [5]
+        \\mov bx, [3458]
+        //
+        // Memory-to-accumulator test
+        \\mov ax, [2555]
+        \\mov ax, [16]
+        //
+        // Accumulator-to-memory test
+        \\mov [2554], ax
+        \\mov [15], ax
+        \\
+    ;
 
-//     try std.testing.expectEqualStrings(expected, actual);
-// }
+    try std.testing.expectEqualStrings(expected, actual);
+}
 
 test "listing_0041_add_sub_cmp_jnz" {
     const a = std.testing.allocator;

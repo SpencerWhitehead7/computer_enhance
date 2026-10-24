@@ -78,9 +78,9 @@ pub const Memory = struct {
                 try w.print(" + {f}", .{p});
             }
             if (s.disp) |d| {
-                switch (d) {
-                    inline else => |cD| if (cD != 0) try w.print(" + {f}", .{std.fmt.alt(d, .formatSigned)}),
-                }
+                const i16d = d.toI16();
+                if (i16d > 0) try w.print(" + {d}", .{i16d});
+                if (i16d < 0) try w.print(" - {d}", .{@abs(i16d)});
             }
         } else if (s.disp) |d| {
             try w.print("{f}", .{std.fmt.alt(d, .formatSigned)});
@@ -119,6 +119,13 @@ pub const ByteOrWord = union(enum) {
         };
     }
 
+    pub fn toI16(s: ByteOrWord) i16 {
+        return switch (s) {
+            .byte => |v| @as(i8, @bitCast(v)),
+            .word => |v| @as(i16, @bitCast(v)),
+        };
+    }
+
     pub fn format(s: ByteOrWord, w: *std.Io.Writer) !void {
         try switch (s) {
             inline else => |v| w.print("{b}", .{v}),
@@ -153,10 +160,10 @@ pub const ByteOrWord = union(enum) {
 
 pub const Instruction = union(enum) {
     movRsmToFromRsm: MovRsmToFromRsm,
-    // movImmToRsm: MovImmToRsm,
+    movImmToRsm: MovImmToRsm,
     movImmToReg: MovImmToReg,
-    // movMemToAcc: MovMemToAcc,
-    // movAccToMem: MovAccToMem,
+    movMemToAcc: MovMemToAcc,
+    movAccToMem: MovAccToMem,
     // movRsmToSegR: MovRsmToSegR, // wtf are these?
     // movSegRToRsm: MovSegRToRsm, // wtf are these?
 
@@ -198,11 +205,14 @@ pub const Instruction = union(enum) {
             // mov
             // 100010dw
             0b10001000...0b10001011 => .{ .movRsmToFromRsm = MovRsmToFromRsm.fromInstructionStream(instructionStream) },
-            // 1100011w => immToRsm,
+            // 1100011w
+            0b11000110...0b11000111 => .{ .movImmToRsm = MovImmToRsm.fromInstructionStream(instructionStream) },
             // 1011wreg
             0b10110000...0b10111111 => .{ .movImmToReg = MovImmToReg.fromInstructionStream(instructionStream) },
-            //  1010000w => movMemToAcc,
-            //  1010001w => movAccToMem,
+            //  1010000w
+            0b10100000...0b10100001 => .{ .movMemToAcc = MovMemToAcc.fromInstructionStream(instructionStream) },
+            //  1010001w
+            0b10100010...0b10100011 => .{ .movAccToMem = MovAccToMem.fromInstructionStream(instructionStream) },
             //  10001110 => movRsmToSegR,
             //  10001100 => movSegRToRsm,
 
@@ -276,7 +286,10 @@ pub const Instruction = union(enum) {
     pub fn format(s: Instruction, w: *std.Io.Writer) !void {
         try switch (s) {
             .movRsmToFromRsm => |impl| impl.format(w),
+            .movImmToRsm => |impl| impl.format(w),
             .movImmToReg => |impl| impl.format(w),
+            .movMemToAcc => |impl| impl.format(w),
+            .movAccToMem => |impl| impl.format(w),
 
             .addRsmToFromRsm => |impl| impl.format(w),
             .addImmToRsm => |impl| impl.format(w),
@@ -316,7 +329,10 @@ pub const Instruction = union(enum) {
     pub fn offset(s: Instruction) u8 {
         return switch (s) {
             .movRsmToFromRsm => |impl| impl.offset,
+            .movImmToRsm => |impl| impl.offset,
             .movImmToReg => |impl| impl.offset,
+            .movMemToAcc => |impl| impl.offset,
+            .movAccToMem => |impl| impl.offset,
 
             .addRsmToFromRsm => |impl| impl.offset,
             .addImmToRsm => |impl| impl.offset,
@@ -439,7 +455,51 @@ pub const MovRsmToFromRsm = struct {
         try w.print("mov {f}, {f}", .{ s.dst, s.src });
     }
 };
-// MovImmToRsm
+pub const MovImmToRsm = struct {
+    dst: RegisterOrMemory,
+    src: ByteOrWord,
+    offset: u8,
+
+    pub fn fromInstructionStream(instructionStream: []const u8) MovImmToRsm {
+        const b0 = instructionStream[0];
+        const w: u1 = @intCast(b0 >> 0 & 0b1);
+
+        const b1 = instructionStream[1];
+        const mod: u2 = @intCast(b1 >> 6 & 0b11);
+        const rsm: u3 = @intCast(b1 >> 0 & 0b111);
+
+        const disp = switch (mod) {
+            0b00 => switch (rsm) {
+                // special case (direct address with 16 bit displacement)
+                0b110 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+                else => null,
+            },
+            0b01 => ByteOrWord.initByte(instructionStream[2]),
+            0b10 => ByteOrWord.initWord(instructionStream[2], instructionStream[3]),
+            0b11 => null,
+        };
+        const dispOffset: u8 = if (disp) |v| v.offset() else 0;
+
+        const dst = switch (mod) {
+            0b11 => RegisterOrMemory{ .reg = REGISTER_LOOKUP[w][rsm] },
+            else => RegisterOrMemory{ .mem = Memory.init(mod, rsm, disp) },
+        };
+        const src = switch (w) {
+            0 => ByteOrWord.initByte(instructionStream[2 + dispOffset]),
+            1 => ByteOrWord.initWord(instructionStream[2 + dispOffset], instructionStream[3 + dispOffset]),
+        };
+        const offset = 2 + dispOffset + src.offset();
+
+        return .{ .dst = dst, .src = src, .offset = offset };
+    }
+
+    pub fn format(s: *const MovImmToRsm, w: *std.Io.Writer) !void {
+        try switch (s.dst) {
+            .reg => w.print("mov {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) }),
+            .mem => w.print("mov {f}, {s} {f}", .{ s.dst, s.src.widthLabel(), std.fmt.alt(s.src, .formatSigned) }),
+        };
+    }
+};
 pub const MovImmToReg = struct {
     dst: Register,
     src: ByteOrWord,
@@ -466,8 +526,56 @@ pub const MovImmToReg = struct {
         try w.print("mov {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) });
     }
 };
-// MovMemToAcc
-// MovAccToMem
+pub const MovMemToAcc = struct {
+    dst: Register,
+    src: Memory,
+    offset: u8,
+
+    pub fn fromInstructionStream(instructionStream: []const u8) MovMemToAcc {
+        const b0 = instructionStream[0];
+        const w: u1 = @intCast(b0 & 0b1);
+
+        const register, const disp = switch (w) {
+            0 => .{ Register.al, ByteOrWord.initByte(instructionStream[1]) },
+            1 => .{ Register.ax, ByteOrWord.initWord(instructionStream[1], instructionStream[2]) },
+        };
+
+        return .{
+            .dst = register,
+            .src = Memory{ .disp = disp },
+            .offset = 1 + disp.offset(),
+        };
+    }
+
+    pub fn format(s: *const MovMemToAcc, w: *std.Io.Writer) !void {
+        try w.print("mov {f}, {f}", .{ s.dst, s.src });
+    }
+};
+pub const MovAccToMem = struct {
+    dst: Memory,
+    src: Register,
+    offset: u8,
+
+    pub fn fromInstructionStream(instructionStream: []const u8) MovAccToMem {
+        const b0 = instructionStream[0];
+        const w: u1 = @intCast(b0 & 0b1);
+
+        const register, const disp = switch (w) {
+            0 => .{ Register.al, ByteOrWord.initByte(instructionStream[1]) },
+            1 => .{ Register.ax, ByteOrWord.initWord(instructionStream[1], instructionStream[2]) },
+        };
+
+        return .{
+            .dst = Memory{ .disp = disp },
+            .src = register,
+            .offset = 1 + disp.offset(),
+        };
+    }
+
+    pub fn format(s: *const MovAccToMem, w: *std.Io.Writer) !void {
+        try w.print("mov {f}, {f}", .{ s.dst, s.src });
+    }
+};
 // MovRsmToSegR
 // MovSegRToRsm
 
