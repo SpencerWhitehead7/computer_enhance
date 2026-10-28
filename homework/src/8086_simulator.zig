@@ -19,6 +19,11 @@ const Simulator = struct {
     flags: u16 = 0b0000_0000_0000_0000,
     // 0,0,0,0 - OF,DF,IF,TF _ SF,ZF,0,AF _ 0,PF,0,CF
 
+    // real 8086 have 1mb memory (2^20) and use segement registers for accessing the whole range,
+    // since a 2 byte address can only access the first 2^16 of the memory
+    // but the course doesn't cover it so I'm just leaving it out
+    mem: [1 << 16]u8 = std.mem.zeroes([1 << 16]u8),
+
     pub fn format(s: Simulator, w: *std.Io.Writer) !void {
         try w.writeAll("Simulator{\n");
         try w.print("  instructionStream: {d} {any}\n", .{ s.instructionStream.len, s.instructionStream });
@@ -66,6 +71,7 @@ const Simulator = struct {
 
         switch (instruction) {
             .movRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .mov = i }),
+            .movImmToRsm => |i| sMut.immAndRsm(.{ .mov = i }),
             .movImmToReg => |i| sMut.movImmToReg(i),
 
             .addRsmToFromRsm => |i| sMut.rsmAndRsm(.{ .add = i }),
@@ -125,6 +131,27 @@ const Simulator = struct {
         }
     }
 
+    fn getMemoryWord(s: *const Simulator, m: instr.Memory) u16 {
+        const loc = s.getLocation(m);
+        return @as(u16, s.mem[loc]) << 8 | s.mem[loc + 1];
+    }
+
+    fn setMemoryWord(s: *Simulator, m: instr.Memory, v: u16) void {
+        const loc = s.getLocation(m);
+        const loByte: u8 = @truncate(v >> 8);
+        const hiByte: u8 = @truncate(v);
+        s.mem[loc] = loByte;
+        s.mem[loc + 1] = hiByte;
+    }
+
+    fn getLocation(s: *const Simulator, m: instr.Memory) u16 {
+        const regBaseVal = if (m.regBase) |r| s.getRegister(r) else 0;
+        const regPlusVal = if (m.regPlus) |r| s.getRegister(r) else 0;
+        const dispVal = if (m.disp) |d| d.toU16() else 0;
+
+        return regBaseVal + regPlusVal + dispVal;
+    }
+
     fn getZF(s: *const Simulator) bool {
         return (s.flags >> 6 & 1) > 0;
     }
@@ -175,8 +202,16 @@ const Simulator = struct {
                         }
                     },
                     .mem => |src| {
-                        std.debug.print("memory srcs not supported (yet):: {f}\n", .{src});
-                        unreachable;
+                        switch (i) {
+                            .mov => {
+                                s.setRegister(dst, s.getMemoryWord(src));
+                                break :blk null;
+                            },
+                            inline else => {
+                                std.debug.print("non-mov rsm and rsm operations not supported (yet):: {f}\n", .{i});
+                                unreachable;
+                            },
+                        }
                     },
                 }
             },
@@ -199,9 +234,10 @@ const Simulator = struct {
                 const srcVal = i.src().toU16();
 
                 switch (i) {
-                    // .mov => {
-                    //     break :blk null;
-                    // },
+                    .mov => {
+                        s.setRegister(dst, srcVal);
+                        break :blk null;
+                    },
                     .add => {
                         const result = dstVal +% srcVal;
                         s.setRegister(dst, result);
@@ -216,15 +252,29 @@ const Simulator = struct {
                 }
             },
             .mem => |dst| {
-                std.debug.print("memory dsts not supported (yet):: {f}\n", .{dst});
-                unreachable;
+                switch (i) {
+                    .mov => |v| {
+                        switch (v.src) {
+                            .byte => {
+                                std.debug.print("byte operations not supported:: {f}\n", .{v});
+                                unreachable;
+                            },
+                            .word => |src| s.setMemoryWord(dst, src),
+                        }
+                        break :blk null;
+                    },
+                    inline else => {
+                        std.debug.print("non-mov imm to mem operations not supported:: {f}\n", .{i});
+                        unreachable;
+                    },
+                }
             },
         };
 
-        // if (result) |r| {
-        s.setSF(result);
-        s.setZF(result);
-        // }
+        if (result) |r| {
+            s.setSF(r);
+            s.setZF(r);
+        }
     }
 
     fn movImmToReg(s: *Simulator, i: instr.MovImmToReg) void {
@@ -264,10 +314,16 @@ const RsmAndRsm = union(enum) {
             inline else => |i| i.src,
         };
     }
+
+    pub fn format(s: RsmAndRsm, w: *std.Io.Writer) !void {
+        try switch (s) {
+            inline else => |i| i.format(w),
+        };
+    }
 };
 
 const ImmAndRsm = union(enum) {
-    // mov: instr.MovImmToRsm,
+    mov: instr.MovImmToRsm,
     add: instr.AddImmToRsm,
     sub: instr.SubImmFromRsm,
     cmp: instr.CmpImmWithRsm,
@@ -281,6 +337,12 @@ const ImmAndRsm = union(enum) {
     fn src(s: ImmAndRsm) instr.ByteOrWord {
         return switch (s) {
             inline else => |i| i.src,
+        };
+    }
+
+    pub fn format(s: ImmAndRsm, w: *std.Io.Writer) !void {
+        try switch (s) {
+            inline else => |i| i.format(w),
         };
     }
 };
@@ -345,4 +407,16 @@ test "listing_0049_conditional_jumps" {
     try std.testing.expectEqual(iStream.len, finalSim.ip);
     try std.testing.expect(!finalSim.getSF());
     try std.testing.expect(finalSim.getZF());
+}
+
+test "listing_0051_memory_mov" {
+    const sim: Simulator = .{};
+    const finalSim = sim.execute(&[_]u8{
+        199, 6, 232, 3, 1, 0, 199, 6, 234, 3, 2, 0, 199, 6, 236, 3, 3, 0, 199, 6, 238, 3, 4, 0, 187, 232, 3, 199, 71, 4, 10, 0, 139, 30, 232, 3, 139, 14, 234, 3, 139, 22, 236, 3, 139, 46, 238, 3,
+    });
+    try std.testing.expectEqual(1, finalSim.bx);
+    try std.testing.expectEqual(2, finalSim.cx);
+    try std.testing.expectEqual(10, finalSim.dx);
+    try std.testing.expectEqual(4, finalSim.bp);
+    try std.testing.expectEqual(48, finalSim.ip);
 }
