@@ -69,6 +69,52 @@ pub const Memory = struct {
         };
     }
 
+    fn eacCycles(s: *const Memory) u8 {
+        const dispExists = if (s.disp) |d| d.toU16() != 0 else false;
+        const regBaseExists = s.regBase != null;
+        const regPlusExists = s.regPlus != null;
+        const isRegBaseBP = s.regBase == Register.bp;
+        const isRegBaseBX = s.regBase == Register.bx;
+        const isRegPlusDI = s.regPlus == Register.di;
+        const isRegPlusSI = s.regPlus == Register.si;
+
+        if (dispExists and !regBaseExists and !regPlusExists) {
+            return 6;
+        } else if (!dispExists and ((regBaseExists and !regPlusExists) or (!regBaseExists and regPlusExists))) {
+            return 5;
+        } else if (dispExists and ((regBaseExists and !regPlusExists) or (!regBaseExists and regPlusExists))) {
+            return 9;
+        } else if (!dispExists and regBaseExists and regPlusExists) {
+            if ((isRegBaseBP and isRegPlusDI) or (isRegBaseBX and isRegPlusSI)) {
+                return 7;
+            } else if ((isRegBaseBP and isRegPlusSI) or (isRegBaseBX and isRegPlusDI)) {
+                return 8;
+            }
+        } else if (dispExists and regBaseExists and regPlusExists) {
+            if ((isRegBaseBP and isRegPlusDI) or (isRegBaseBX and isRegPlusSI)) {
+                return 11;
+            } else if ((isRegBaseBP and isRegPlusSI) or (isRegBaseBX and isRegPlusDI)) {
+                return 12;
+            } else {
+                std.debug.print("invalid regBase or regPlus - only bp/bx and di/si supported :: {f}\n", .{s});
+                unreachable;
+            }
+        }
+
+        std.debug.print("invalid memory - must have at least one of regBase, regPlus, disp :: {f}\n", .{s});
+        unreachable;
+    }
+
+    fn transferCycles(s: *const Memory, transferCount: ?u8) ?u8 {
+        const tc = transferCount orelse return null;
+        const d = s.disp orelse return null;
+
+        return switch (d) {
+            .byte => null,
+            .word => |w| if (w % 2 != 0) 4 * tc else null,
+        };
+    }
+
     pub fn format(s: Memory, w: *std.Io.Writer) !void {
         try w.writeAll("[");
 
@@ -155,6 +201,27 @@ pub const ByteOrWord = union(enum) {
             .byte => 1,
             .word => 2,
         };
+    }
+};
+
+pub const Cost = struct {
+    baseCycles: u8,
+    transferCount: ?u8 = null,
+    memory: ?Memory = null,
+
+    pub fn format(s: Cost, w: *std.Io.Writer) !void {
+        if (s.memory) |mem| {
+            const eacCycles = mem.eacCycles();
+            if (mem.transferCycles(s.transferCount)) |transferCycles| {
+                const totalCycles = s.baseCycles + eacCycles + transferCycles;
+                try w.print("{d} ({d} + {d}eac + {d}p)", .{ totalCycles, s.baseCycles, eacCycles, transferCycles });
+            } else {
+                const totalCycles = s.baseCycles + eacCycles;
+                try w.print("{d} ({d} + {d}eac)", .{ totalCycles, s.baseCycles, eacCycles });
+            }
+        } else {
+            try w.print("{d}", .{s.baseCycles});
+        }
     }
 };
 
@@ -326,6 +393,49 @@ pub const Instruction = union(enum) {
         };
     }
 
+    pub fn formatWithCost(s: Instruction, w: *std.Io.Writer) !void {
+        try switch (s) {
+            .movRsmToFromRsm => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .movImmToRsm => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .movImmToReg => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .movMemToAcc => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .movAccToMem => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+
+            .addRsmToFromRsm => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .addImmToRsm => |impl| w.print("{f}    ; {f}", .{ impl, impl.cost() }),
+            .addImmToAcc => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+
+            .subRsmToFromRsm => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+            .subImmFromRsm => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+            .subImmFromAcc => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+
+            .cmpRsmAndR => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+            .cmpImmWithRsm => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+            .cmpImmWithAcc => |impl| w.print("{f}    ; cost not implemented", .{impl}),
+
+            .retJe => |impl| w.print("je {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJl => |impl| w.print("jl {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJle => |impl| w.print("jle {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJb => |impl| w.print("jb {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJbe => |impl| w.print("jbe {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJp => |impl| w.print("jp {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJo => |impl| w.print("jo {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJs => |impl| w.print("js {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJne => |impl| w.print("jne {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJnl => |impl| w.print("jnl {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJnle => |impl| w.print("jnle {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJnb => |impl| w.print("jnb {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJnbe => |impl| w.print("jnbe {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJnp => |impl| w.print("jnp {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJno => |impl| w.print("jno {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJns => |impl| w.print("jns {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retLoop => |impl| w.print("loop {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retLoopz => |impl| w.print("loopz {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retLoopnz => |impl| w.print("loopnz {d}    ; cost not implemented", .{impl.ipinc8}),
+            .retJcxz => |impl| w.print("jcxz {d}    ; cost not implemented", .{impl.ipinc8}),
+        };
+    }
+
     pub fn offset(s: Instruction) u8 {
         return switch (s) {
             .movRsmToFromRsm => |impl| impl.offset,
@@ -451,6 +561,22 @@ pub const MovRsmToFromRsm = struct {
         return .{ .dst = dst, .src = src, .offset = offset };
     }
 
+    pub fn cost(s: *const MovRsmToFromRsm) Cost {
+        return switch (s.dst) {
+            .reg => switch (s.src) {
+                .reg => .{ .baseCycles = 2 },
+                .mem => |src| .{ .baseCycles = 8, .transferCount = 1, .memory = src },
+            },
+            .mem => |dst| switch (s.src) {
+                .reg => .{ .baseCycles = 9, .transferCount = 1, .memory = dst },
+                .mem => {
+                    std.debug.print("memory - memory MOVs invalid:: {f}\n", .{s});
+                    unreachable;
+                },
+            },
+        };
+    }
+
     pub fn format(s: *const MovRsmToFromRsm, w: *std.Io.Writer) !void {
         try w.print("mov {f}, {f}", .{ s.dst, s.src });
     }
@@ -493,6 +619,13 @@ pub const MovImmToRsm = struct {
         return .{ .dst = dst, .src = src, .offset = offset };
     }
 
+    pub fn cost(s: *const MovImmToRsm) Cost {
+        return switch (s.dst) {
+            .reg => .{ .baseCycles = 4 },
+            .mem => |dst| .{ .baseCycles = 10, .transferCount = 1, .memory = dst },
+        };
+    }
+
     pub fn format(s: *const MovImmToRsm, w: *std.Io.Writer) !void {
         try switch (s.dst) {
             .reg => w.print("mov {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) }),
@@ -522,6 +655,10 @@ pub const MovImmToReg = struct {
         };
     }
 
+    pub fn cost(_: *const MovImmToReg) Cost {
+        return .{ .baseCycles = 4 };
+    }
+
     pub fn format(s: *const MovImmToReg, w: *std.Io.Writer) !void {
         try w.print("mov {f}, {f}", .{ s.dst, std.fmt.alt(s.src, .formatSigned) });
     }
@@ -545,6 +682,10 @@ pub const MovMemToAcc = struct {
             .src = Memory{ .disp = disp },
             .offset = 1 + disp.offset(),
         };
+    }
+
+    pub fn cost(_: *const MovMemToAcc) Cost {
+        return .{ .baseCycles = 10 };
     }
 
     pub fn format(s: *const MovMemToAcc, w: *std.Io.Writer) !void {
@@ -572,6 +713,10 @@ pub const MovAccToMem = struct {
         };
     }
 
+    pub fn cost(_: *const MovAccToMem) Cost {
+        return .{ .baseCycles = 10 };
+    }
+
     pub fn format(s: *const MovAccToMem, w: *std.Io.Writer) !void {
         try w.print("mov {f}, {f}", .{ s.dst, s.src });
     }
@@ -591,6 +736,22 @@ pub const AddRsmToFromRsm = struct {
         return .{ .dst = dst, .src = src, .offset = offset };
     }
 
+    pub fn cost(s: *const AddRsmToFromRsm) Cost {
+        return switch (s.dst) {
+            .reg => switch (s.src) {
+                .reg => .{ .baseCycles = 3 },
+                .mem => |src| .{ .baseCycles = 9, .transferCount = 1, .memory = src },
+            },
+            .mem => |dst| switch (s.src) {
+                .reg => .{ .baseCycles = 16, .transferCount = 2, .memory = dst },
+                .mem => {
+                    std.debug.print("memory - memory ADDs invalid:: {f}\n", .{s});
+                    unreachable;
+                },
+            },
+        };
+    }
+
     pub fn format(s: *const AddRsmToFromRsm, w: *std.Io.Writer) !void {
         try w.print("add {f}, {f}", .{ s.dst, s.src });
     }
@@ -603,6 +764,13 @@ pub const AddImmToRsm = struct {
     pub fn fromInstructionStream(instructionStream: []const u8) AddImmToRsm {
         const dst, const src, const offset = parseImmAndRsm(instructionStream);
         return .{ .dst = dst, .src = src, .offset = offset };
+    }
+
+    pub fn cost(s: *const AddImmToRsm) Cost {
+        return switch (s.dst) {
+            .reg => .{ .baseCycles = 4 },
+            .mem => |dst| .{ .baseCycles = 17, .transferCount = 2, .memory = dst },
+        };
     }
 
     pub fn format(s: *const AddImmToRsm, w: *std.Io.Writer) !void {

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const instr = @import("./8086_instruction.zig");
 
-fn decode(a: std.mem.Allocator, instructionStream: []const u8) ![]const u8 {
+fn decode(a: std.mem.Allocator, instructionStream: []const u8, printWithCost: bool) ![]const u8 {
     var serialized = std.Io.Writer.Allocating.init(a);
     errdefer serialized.deinit();
 
@@ -12,7 +12,7 @@ fn decode(a: std.mem.Allocator, instructionStream: []const u8) ![]const u8 {
     while (i < instructionStream.len) {
         const instruction = instr.Instruction.fromInstructionStream(instructionStream[i..]);
 
-        try serialized.writer.print("{f}\n", .{instruction});
+        try if (printWithCost) serialized.writer.print("{f}\n", .{std.fmt.alt(instruction, .formatWithCost)}) else serialized.writer.print("{f}\n", .{instruction});
 
         i += instruction.offset();
     }
@@ -23,7 +23,7 @@ fn decode(a: std.mem.Allocator, instructionStream: []const u8) ![]const u8 {
 test "listing_0037_single_register_mov" {
     const a = std.testing.allocator;
     const instructionStream = [_]u8{ 137, 217 };
-    const actual = try decode(a, &instructionStream);
+    const actual = try decode(a, &instructionStream, false);
     defer a.free(actual);
 
     const expected =
@@ -39,7 +39,7 @@ test "listing_0037_single_register_mov" {
 test "listing_0038_many_register_mov" {
     const a = std.testing.allocator;
     const instructionStream = [_]u8{ 137, 217, 136, 229, 137, 218, 137, 222, 137, 251, 136, 200, 136, 237, 137, 195, 137, 243, 137, 252, 137, 197 };
-    const actual = try decode(a, &instructionStream);
+    const actual = try decode(a, &instructionStream, false);
     defer a.free(actual);
 
     const expected =
@@ -65,7 +65,7 @@ test "listing_0038_many_register_mov" {
 test "listing_0039_more_movs" {
     const a = std.testing.allocator;
     const instructionStream = [_]u8{ 137, 222, 136, 198, 177, 12, 181, 244, 185, 12, 0, 185, 244, 255, 186, 108, 15, 186, 148, 240, 138, 0, 139, 27, 139, 86, 0, 138, 96, 4, 138, 128, 135, 19, 137, 9, 136, 10, 136, 110, 0 };
-    const actual = try decode(a, &instructionStream);
+    const actual = try decode(a, &instructionStream, false);
     defer a.free(actual);
 
     const expected =
@@ -109,7 +109,7 @@ test "listing_0039_more_movs" {
 test "listing_0040_challenge_movs" {
     const a = std.testing.allocator;
     const instructionStream = [_]u8{ 139, 65, 219, 137, 140, 212, 254, 139, 87, 224, 198, 3, 7, 199, 133, 133, 3, 91, 1, 139, 46, 5, 0, 139, 30, 130, 13, 161, 251, 9, 161, 16, 0, 163, 250, 9, 163, 15, 0 };
-    const actual = try decode(a, &instructionStream);
+    const actual = try decode(a, &instructionStream, false);
     defer a.free(actual);
 
     const expected =
@@ -144,7 +144,7 @@ test "listing_0040_challenge_movs" {
 test "listing_0041_add_sub_cmp_jnz" {
     const a = std.testing.allocator;
     const instructionStream = [_]u8{ 3, 24, 3, 94, 0, 131, 198, 2, 131, 197, 2, 131, 193, 8, 3, 94, 0, 3, 79, 2, 2, 122, 4, 3, 123, 6, 1, 24, 1, 94, 0, 1, 94, 0, 1, 79, 2, 0, 122, 4, 1, 123, 6, 128, 7, 34, 131, 130, 232, 3, 29, 3, 70, 0, 2, 0, 1, 216, 0, 224, 5, 232, 3, 4, 226, 4, 9, 43, 24, 43, 94, 0, 131, 238, 2, 131, 237, 2, 131, 233, 8, 43, 94, 0, 43, 79, 2, 42, 122, 4, 43, 123, 6, 41, 24, 41, 94, 0, 41, 94, 0, 41, 79, 2, 40, 122, 4, 41, 123, 6, 128, 47, 34, 131, 41, 29, 43, 70, 0, 42, 0, 41, 216, 40, 224, 45, 232, 3, 44, 226, 44, 9, 59, 24, 59, 94, 0, 131, 254, 2, 131, 253, 2, 131, 249, 8, 59, 94, 0, 59, 79, 2, 58, 122, 4, 59, 123, 6, 57, 24, 57, 94, 0, 57, 94, 0, 57, 79, 2, 56, 122, 4, 57, 123, 6, 128, 63, 34, 131, 62, 226, 18, 29, 59, 70, 0, 58, 0, 57, 216, 56, 224, 61, 232, 3, 60, 226, 60, 9, 117, 2, 117, 252, 117, 250, 117, 252, 116, 254, 124, 252, 126, 250, 114, 248, 118, 246, 122, 244, 112, 242, 120, 240, 117, 238, 125, 236, 127, 234, 115, 232, 119, 230, 123, 228, 113, 226, 121, 224, 226, 222, 225, 220, 224, 218, 227, 216 };
-    const actual = try decode(a, &instructionStream);
+    const actual = try decode(a, &instructionStream, false);
     defer a.free(actual);
 
     const expected =
@@ -258,6 +258,73 @@ test "listing_0041_add_sub_cmp_jnz" {
         \\loopz -36
         \\loopnz -38
         \\jcxz -40
+        \\
+    ;
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "listing_0056_estimating_cycles" {
+    const a = std.testing.allocator;
+    const instructionStream = [_]u8{ 187, 232, 3, 189, 208, 7, 190, 184, 11, 191, 160, 15, 137, 217, 186, 12, 0, 139, 22, 232, 3, 139, 15, 139, 78, 0, 137, 12, 137, 13, 139, 143, 232, 3, 139, 142, 232, 3, 137, 140, 232, 3, 137, 141, 232, 3, 1, 209, 1, 141, 232, 3, 131, 194, 50 };
+    const actual = try decode(a, &instructionStream, true);
+    defer a.free(actual);
+
+    // I had to change the output a little for ways the decoders differ - not using the simulator, no running total, optional byte and word prefixes
+    const expected =
+        \\bits 16
+        \\
+        \\mov bx, 1000    ; 4
+        \\mov bp, 2000    ; 4
+        \\mov si, 3000    ; 4
+        \\mov di, 4000    ; 4
+        \\mov cx, bx    ; 2
+        \\mov dx, 12    ; 4
+        \\mov dx, [1000]    ; 14 (8 + 6eac)
+        \\mov cx, [bx]    ; 13 (8 + 5eac)
+        \\mov cx, [bp]    ; 13 (8 + 5eac)
+        \\mov [si], cx    ; 14 (9 + 5eac)
+        \\mov [di], cx    ; 14 (9 + 5eac)
+        \\mov cx, [bx + 1000]    ; 17 (8 + 9eac)
+        \\mov cx, [bp + 1000]    ; 17 (8 + 9eac)
+        \\mov [si + 1000], cx    ; 18 (9 + 9eac)
+        \\mov [di + 1000], cx    ; 18 (9 + 9eac)
+        \\add cx, dx    ; 3
+        \\add [di + 1000], cx    ; 25 (16 + 9eac)
+        \\add dx, 50    ; 4
+        \\
+    ;
+
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "listing_0057_challenge_cycles" {
+    const a = std.testing.allocator;
+    const instructionStream = [_]u8{ 187, 232, 3, 189, 208, 7, 190, 184, 11, 191, 160, 15, 139, 11, 137, 8, 139, 10, 137, 9, 139, 139, 232, 3, 137, 136, 232, 3, 139, 138, 232, 3, 137, 137, 232, 3, 3, 146, 232, 3, 131, 2, 76, 3, 146, 233, 3, 1, 149, 231, 3, 131, 2, 75 };
+    const actual = try decode(a, &instructionStream, true);
+    defer a.free(actual);
+
+    // I had to change the output a little for ways the decoders differ - not using the simulator, no running total, optional byte and word prefixes
+    const expected =
+        \\bits 16
+        \\
+        \\mov bx, 1000    ; 4
+        \\mov bp, 2000    ; 4
+        \\mov si, 3000    ; 4
+        \\mov di, 4000    ; 4
+        \\mov cx, [bp + di]    ; 15 (8 + 7eac)
+        \\mov [bx + si], cx    ; 16 (9 + 7eac)
+        \\mov cx, [bp + si]    ; 16 (8 + 8eac)
+        \\mov [bx + di], cx    ; 17 (9 + 8eac)
+        \\mov cx, [bp + di + 1000]    ; 19 (8 + 11eac)
+        \\mov [bx + si + 1000], cx    ; 20 (9 + 11eac)
+        \\mov cx, [bp + si + 1000]    ; 20 (8 + 12eac)
+        \\mov [bx + di + 1000], cx    ; 21 (9 + 12eac)
+        \\add dx, [bp + si + 1000]    ; 21 (9 + 12eac)
+        \\add word [bp + si], 76    ; 25 (17 + 8eac)
+        \\add dx, [bp + si + 1001]    ; 25 (9 + 12eac + 4p)
+        \\add [di + 999], dx    ; 33 (16 + 9eac + 8p)
+        \\add word [bp + si], 75    ; 25 (17 + 8eac)
         \\
     ;
 
