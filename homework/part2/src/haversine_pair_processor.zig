@@ -7,14 +7,16 @@ const process = std.process;
 
 const json = @import("./haversine_json_parser.zig");
 const ref = @import("./haversine_reference.zig");
-const timers = @import("./timers.zig");
+const prof = @import("./profiler.zig");
 
 pub fn main(init: process.Init) !void {
-    const setupStart = timers.readCPUTimer();
-
     const a = init.arena.allocator();
     const io = init.io;
 
+    try prof.profiler.init(a);
+    defer prof.profiler.deinit();
+
+    prof.profiler.beg("setup");
     const args = try init.minimal.args.toSlice(a);
     if (args.len != 2) {
         const usage =
@@ -34,10 +36,9 @@ pub fn main(init: process.Init) !void {
         debug.print("Failed to parse size into u64:: {s}\n", .{inputSize});
         return error.InvalidArgument;
     };
+    prof.profiler.end();
 
-    const setupEnd = timers.readCPUTimer();
-    const ioStart = timers.readCPUTimer();
-
+    prof.profiler.beg("io");
     const cwd = Io.Dir.cwd();
     const inFileDirPath = "homework/part2/inputs";
     const inFileDir = try cwd.openDir(io, inFileDirPath, .{});
@@ -45,19 +46,14 @@ pub fn main(init: process.Init) !void {
 
     const inFileName = try fmt.allocPrint(a, "{d}.json", .{size});
     const outFileContents = try inFileDir.readFileAlloc(io, inFileName, a, Io.Limit.unlimited);
+    prof.profiler.end();
 
-    const ioEnd = timers.readCPUTimer();
-    const parseStart = timers.readCPUTimer();
-
+    prof.profiler.beg("parse");
     var parser = json.Parser.init(outFileContents);
     const parsed = try parser.parse(a);
+    prof.profiler.end();
 
-    const parseEnd = timers.readCPUTimer();
-    const calculateStart = timers.readCPUTimer();
-    var calculateEnd: u64 = 0;
-    var printStart: u64 = 0;
-    var printEnd: u64 = 0;
-
+    prof.profiler.beg("calculate");
     // holy shit is this unwieldy - all the unwrapping from not being parsed into a known shape
     // that'd be a fun follow up, probably make it faster too
     switch (parsed) {
@@ -126,56 +122,12 @@ pub fn main(init: process.Init) !void {
                     inline else => return error.InvalidInput,
                 }
             }
+            prof.profiler.end();
 
-            calculateEnd = timers.readCPUTimer();
-            printStart = timers.readCPUTimer();
-
+            prof.profiler.beg("print");
             debug.print("recordedSum:: {d}\ncalculatedSum:: {d}\ndifference:: {d}\n", .{ recordedSum, calculatedSum, recordedSum - calculatedSum });
-
-            printEnd = timers.readCPUTimer();
+            prof.profiler.end();
         },
         inline else => return error.InvalidInput,
     }
-
-    const cpuFreq = timers.estimateCPUTimerFreq(io, 100_000);
-    const fcpuFreq = @as(f64, @floatFromInt(cpuFreq));
-
-    const totalTicksElapsed = printEnd - setupStart;
-    const ftotalTicksElapsed = @as(f64, @floatFromInt(totalTicksElapsed));
-
-    const totalMsElapsed = (ftotalTicksElapsed / fcpuFreq) * 1_000;
-
-    debug.print("\ncpuFreq:: {d}\n", .{cpuFreq});
-    debug.print(
-        "{s:<12} | {d:>16} | {d:>16.2} {s:>32}\n",
-        .{ "total::", totalTicksElapsed, totalMsElapsed, "(measured, not summed)" },
-    );
-
-    debug.print(
-        "\n{s:<12} | {s:>16} | {s:>16} | {s:>6}\n",
-        .{ "Phase", "Ticks", "Time (ms)", "%" },
-    );
-    debug.print(
-        "{s:-<12}-+-{s:->16}-+-{s:->16}-+-{s:->6}\n",
-        .{ "", "", "", "" },
-    );
-
-    printElapsed("setup", ftotalTicksElapsed, fcpuFreq, setupStart, setupEnd);
-    printElapsed("io", ftotalTicksElapsed, fcpuFreq, ioStart, ioEnd);
-    printElapsed("parse", ftotalTicksElapsed, fcpuFreq, parseStart, parseEnd);
-    printElapsed("calculate", ftotalTicksElapsed, fcpuFreq, calculateStart, calculateEnd);
-    printElapsed("print", ftotalTicksElapsed, fcpuFreq, printStart, printEnd);
-}
-
-fn printElapsed(label: []const u8, ftotalTicksElapsed: f64, fcpuFreq: f64, start: u64, end: u64) void {
-    const ticksElapsed = end - start;
-    const fTicksElapsed = @as(f64, @floatFromInt(ticksElapsed));
-
-    const msElapsed = (fTicksElapsed / fcpuFreq) * 1_000;
-    const percent = (fTicksElapsed / ftotalTicksElapsed) * 100;
-
-    debug.print(
-        "{s:<12} | {d:>16} | {d:>16.2} | {d:>6.2}\n",
-        .{ label, ticksElapsed, msElapsed, percent },
-    );
 }

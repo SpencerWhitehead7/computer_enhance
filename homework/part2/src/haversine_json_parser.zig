@@ -7,6 +7,8 @@ const heap = std.heap;
 const mem = std.mem;
 const testing = std.testing;
 
+const prof = @import("profiler.zig");
+
 const Token = union(enum) {
     // not handling bools, nulls, etc...
     openDict: void,
@@ -143,11 +145,15 @@ pub const Parser = struct {
     }
 
     fn parseDict(s: *@This(), a: mem.Allocator) error{ InvalidJSON, OutOfMemory }!Element {
+        prof.profiler.beg("parseDict");
         var dict: StringHashMap(Element) = .init(a);
 
         while (try s.nextToken()) |key| {
             switch (key) {
-                .closeDict => return .{ .dict = dict },
+                .closeDict => {
+                    prof.profiler.end();
+                    return .{ .dict = dict };
+                },
                 .comma => continue,
                 .string => |cKey| {
                     const colon = try s.nextToken() orelse return error.InvalidJSON;
@@ -173,11 +179,15 @@ pub const Parser = struct {
     }
 
     fn parseList(s: *@This(), a: mem.Allocator) error{ InvalidJSON, OutOfMemory }!Element {
+        prof.profiler.beg("parseList");
         var list: ArrayList(Element) = .empty;
 
         while (try s.nextToken()) |t| {
             switch (t) {
-                .closeList => return .{ .list = try list.toOwnedSlice(a) },
+                .closeList => {
+                    prof.profiler.end();
+                    return .{ .list = try list.toOwnedSlice(a) };
+                },
                 .comma => continue,
                 .openList => try list.append(a, try s.parseList(a)),
                 .openDict => try list.append(a, try s.parseDict(a)),
