@@ -84,6 +84,7 @@ const TimerMerged = struct {
     label: []const u8,
     children: StringArrayHashMapUnmanaged(*TimerMerged) = .empty,
     duration: u64,
+    count: u64 = 1,
 
     fn init(a: mem.Allocator, timer: *const Timer) !TimerMerged {
         var children: StringArrayHashMapUnmanaged(*TimerMerged) = .empty;
@@ -105,6 +106,7 @@ const TimerMerged = struct {
     }
 
     fn merge(s: *@This(), a: mem.Allocator, o: *const Timer) error{OutOfMemory}!void {
+        s.count += 1;
         s.duration += o.endTS - o.begTS;
 
         for (o.children.items) |c| {
@@ -148,8 +150,8 @@ const TimerMerged = struct {
         }
 
         debug.print(
-            " | {d: >14.2} | {d: >14.2} | {d: >15.2}\n",
-            .{ totalDurationMs, selfDurationMs, childrenDurationMs },
+            " | {d: >14} | {d: >14.2} | {d: >14.2} | {d: >15.2}\n",
+            .{ s.count, totalDurationMs, selfDurationMs, childrenDurationMs },
         );
         for (s.children.values()) |c| c.report(depth + 1);
     }
@@ -230,18 +232,18 @@ pub const Profiler = struct {
 
         debug.print("\n", .{});
         debug.print("cpuFreq:: {d}\n", .{timers.getCPUTimerFreq()});
-        debug.print(
-            "{s: <31} | {s: >14} | {s: >14} | {s: >15}\n",
-            .{ "label", "totalDuration", "selfDuration", "childrenDuration" },
-        );
-        debug.print(
-            "{s:-<31}-+-{s:->14}-+-{s:->14}-+-{s:->15}\n",
-            .{ "", "", "", "" },
-        );
 
         const reportStart = timers.readCPUTimer();
 
         if (comptime s.reportMerged) {
+            debug.print(
+                "{s: <31} | {s: >14} | {s: >14} | {s: >14} | {s: >15}\n",
+                .{ "label", "count", "totalDuration", "selfDuration", "childrenDuration" },
+            );
+            debug.print(
+                "{s:-<31}-+-{s:-<14}-+-{s:->14}-+-{s:->14}-+-{s:->15}\n",
+                .{ "", "", "", "", "" },
+            );
             var merged = TimerMerged.init(s.a, &s.root) catch |err| {
                 debug.print("Consolidation failed:: {}", .{err});
                 return;
@@ -249,6 +251,14 @@ pub const Profiler = struct {
             merged.report(0);
             merged.deinit(s.a);
         } else {
+            debug.print(
+                "{s: <31} | {s: >14} | {s: >14} | {s: >15}\n",
+                .{ "label", "totalDuration", "selfDuration", "childrenDuration" },
+            );
+            debug.print(
+                "{s:-<31}-+-{s:->14}-+-{s:->14}-+-{s:->15}\n",
+                .{ "", "", "", "" },
+            );
             s.root.report(0);
         }
 
