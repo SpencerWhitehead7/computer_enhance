@@ -157,6 +157,7 @@ const TimerMerged = struct {
 
 pub const Profiler = struct {
     comptime isEnabled: bool = true,
+    comptime reportMerged: bool = true,
 
     a: mem.Allocator = undefined,
     root: Timer = undefined,
@@ -183,8 +184,7 @@ pub const Profiler = struct {
 
         s.root.end();
 
-        // s.report();
-        s.reportMerged();
+        s.report();
 
         s.root.deinit(s.a);
         s.stack.deinit(s.a);
@@ -241,7 +241,16 @@ pub const Profiler = struct {
 
         const reportStart = timers.readCPUTimer();
 
-        s.root.report(0);
+        if (comptime s.reportMerged) {
+            var merged = TimerMerged.init(s.a, &s.root) catch |err| {
+                debug.print("Consolidation failed:: {}", .{err});
+                return;
+            };
+            merged.report(0);
+            merged.deinit(s.a);
+        } else {
+            s.root.report(0);
+        }
 
         const reportEnd = timers.readCPUTimer();
 
@@ -250,39 +259,6 @@ pub const Profiler = struct {
             .{@as(f64, @floatFromInt(reportEnd - reportStart)) / @as(f64, @floatFromInt(timers.getCPUTimerFreq())) * 1_000},
         );
         // profiling the profiler lmao
-
-        debug.print("\n", .{});
-    }
-
-    fn reportMerged(s: *const @This()) void {
-        if (comptime !s.isEnabled) return;
-
-        debug.print("\n", .{});
-        debug.print("cpuFreq:: {d}\n", .{timers.getCPUTimerFreq()});
-        debug.print(
-            "{s: <31} | {s: >14} | {s: >14} | {s: >15}\n",
-            .{ "label", "totalDuration", "selfDuration", "childrenDuration" },
-        );
-        debug.print(
-            "{s:-<31}-+-{s:->14}-+-{s:->14}-+-{s:->15}\n",
-            .{ "", "", "", "" },
-        );
-
-        const reportStart = timers.readCPUTimer();
-
-        var merged = TimerMerged.init(s.a, &s.root) catch |err| {
-            debug.print("Consolidation failed:: {}", .{err});
-            return;
-        };
-        merged.report(0);
-        merged.deinit(s.a);
-
-        const reportEnd = timers.readCPUTimer();
-
-        debug.print(
-            "\n{d:.2}ms to report\n",
-            .{@as(f64, @floatFromInt(reportEnd - reportStart)) / @as(f64, @floatFromInt(timers.getCPUTimerFreq())) * 1_000},
-        );
 
         debug.print("\n", .{});
     }
