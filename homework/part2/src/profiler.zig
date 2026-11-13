@@ -156,11 +156,15 @@ const TimerMerged = struct {
 };
 
 pub const Profiler = struct {
+    comptime isEnabled: bool = true,
+
     a: mem.Allocator = undefined,
     root: Timer = undefined,
     stack: ArrayList(*Timer) = undefined,
 
     pub fn init(s: *@This(), a: mem.Allocator) !void {
+        if (comptime !s.isEnabled) return;
+
         s.a = a;
         s.root = Timer.init("root");
         s.stack = try ArrayList(*Timer).initCapacity(a, 256);
@@ -170,6 +174,8 @@ pub const Profiler = struct {
     }
 
     pub fn deinit(s: *@This()) void {
+        if (comptime !s.isEnabled) return;
+
         if (s.stack.items.len > 1) {
             debug.print("unbalanced block beg/end somewhere:: {any}", .{s.stack.items});
             unreachable;
@@ -185,6 +191,8 @@ pub const Profiler = struct {
     }
 
     pub fn beg(s: *@This(), comptime label: []const u8) void {
+        if (comptime !s.isEnabled) return;
+
         const child = s.a.create(Timer) catch {
             debug.panic(
                 "{s}:: failed to allocate Timer {s}, Profiler failed",
@@ -211,11 +219,15 @@ pub const Profiler = struct {
     }
 
     pub fn end(s: *@This()) void {
+        if (comptime !s.isEnabled) return;
+
         const timer = s.stack.pop();
         if (timer) |t| t.end();
     }
 
     fn report(s: *const @This()) void {
+        if (comptime !s.isEnabled) return;
+
         debug.print("\n", .{});
         debug.print("cpuFreq:: {d}\n", .{timers.getCPUTimerFreq()});
         debug.print(
@@ -243,6 +255,8 @@ pub const Profiler = struct {
     }
 
     fn reportMerged(s: *const @This()) void {
+        if (comptime !s.isEnabled) return;
+
         debug.print("\n", .{});
         debug.print("cpuFreq:: {d}\n", .{timers.getCPUTimerFreq()});
         debug.print(
@@ -408,3 +422,6 @@ test "Profiler" {
         // }
     };
 }
+
+// 7 seconds with all profiling off
+// 8 with "standard" profiling
