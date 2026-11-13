@@ -1,6 +1,7 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const Io = std.Io;
+const StringArrayHashMapUnmanaged = std.StringArrayHashMapUnmanaged;
 const debug = std.debug;
 const mem = std.mem;
 const testing = std.testing;
@@ -79,6 +80,81 @@ const Timer = struct {
     }
 };
 
+const TimerMerged = struct {
+    label: []const u8,
+    children: StringArrayHashMapUnmanaged(*TimerMerged) = .empty,
+    duration: u64,
+
+    fn init(a: mem.Allocator, timer: *const Timer) !TimerMerged {
+        var children: StringArrayHashMapUnmanaged(*TimerMerged) = .empty;
+        for (timer.children.items) |c| {
+            const res = try children.getOrPut(a, c.label);
+            if (res.found_existing) {
+                try res.value_ptr.*.merge(a, c);
+            } else {
+                res.value_ptr.* = try a.create(TimerMerged);
+                res.value_ptr.*.* = try TimerMerged.init(a, c);
+            }
+        }
+
+        return .{
+            .label = timer.label,
+            .children = children,
+            .duration = timer.endTS - timer.begTS,
+        };
+    }
+
+    fn merge(s: *@This(), a: mem.Allocator, o: *const Timer) error{OutOfMemory}!void {
+        s.duration += o.endTS - o.begTS;
+
+        for (o.children.items) |c| {
+            const res = try s.children.getOrPut(a, c.label);
+            if (res.found_existing) {
+                try res.value_ptr.*.merge(a, c);
+            } else {
+                res.value_ptr.* = try a.create(TimerMerged);
+                res.value_ptr.*.* = try TimerMerged.init(a, c);
+            }
+        }
+    }
+
+    fn deinit(s: *@This(), a: mem.Allocator) void {
+        for (s.children.values()) |c| {
+            c.deinit(a);
+            a.destroy(c);
+        }
+
+        s.children.deinit(a);
+    }
+
+    fn report(s: *const @This(), depth: usize) void {
+        // TODO calculate and print percentages
+        const freq = @as(f64, @floatFromInt(timers.getCPUTimerFreq()));
+
+        const totalDurationMs = (@as(f64, @floatFromInt(s.duration)) / freq) * 1_000;
+
+        var childrenDuration: u64 = 0;
+        for (s.children.values()) |c| childrenDuration += c.duration;
+        const childrenDurationMs = (@as(f64, @floatFromInt(childrenDuration)) / freq) * 1_000;
+
+        const selfDuration = s.duration - childrenDuration;
+        const selfDurationMs = (@as(f64, @floatFromInt(selfDuration)) / freq) * 1_000;
+
+        for (0..depth) |_| debug.print(" ", .{});
+        debug.print("{s}", .{s.label});
+        const labelSectionLen = depth + s.label.len;
+        if (labelSectionLen < 31) {
+            for (0..(31 - depth - s.label.len)) |_| debug.print(" ", .{});
+        }
+
+        debug.print(
+            " | {d: >14.2} | {d: >14.2} | {d: >15.2}\n",
+            .{ totalDurationMs, selfDurationMs, childrenDurationMs },
+        );
+        for (s.children.values()) |c| c.report(depth + 1);
+    }
+};
+
 pub const Profiler = struct {
     a: mem.Allocator = undefined,
     root: Timer = undefined,
@@ -101,7 +177,8 @@ pub const Profiler = struct {
 
         s.root.end();
 
-        s.report();
+        // s.report();
+        s.reportMerged();
 
         s.root.deinit(s.a);
         s.stack.deinit(s.a);
@@ -161,6 +238,37 @@ pub const Profiler = struct {
             .{@as(f64, @floatFromInt(reportEnd - reportStart)) / @as(f64, @floatFromInt(timers.getCPUTimerFreq())) * 1_000},
         );
         // profiling the profiler lmao
+
+        debug.print("\n", .{});
+    }
+
+    fn reportMerged(s: *const @This()) void {
+        debug.print("\n", .{});
+        debug.print("cpuFreq:: {d}\n", .{timers.getCPUTimerFreq()});
+        debug.print(
+            "{s: <31} | {s: >14} | {s: >14} | {s: >15}\n",
+            .{ "label", "totalDuration", "selfDuration", "childrenDuration" },
+        );
+        debug.print(
+            "{s:-<31}-+-{s:->14}-+-{s:->14}-+-{s:->15}\n",
+            .{ "", "", "", "" },
+        );
+
+        const reportStart = timers.readCPUTimer();
+
+        var merged = TimerMerged.init(s.a, &s.root) catch |err| {
+            debug.print("Consolidation failed:: {}", .{err});
+            return;
+        };
+        merged.report(0);
+        merged.deinit(s.a);
+
+        const reportEnd = timers.readCPUTimer();
+
+        debug.print(
+            "\n{d:.2}ms to report\n",
+            .{@as(f64, @floatFromInt(reportEnd - reportStart)) / @as(f64, @floatFromInt(timers.getCPUTimerFreq())) * 1_000},
+        );
 
         debug.print("\n", .{});
     }
