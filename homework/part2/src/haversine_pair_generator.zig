@@ -7,10 +7,15 @@ const process = std.process;
 
 const ref = @import("./haversine_reference.zig");
 const types = @import("./haversine_types.zig");
+const prof = @import("./profiler.zig");
 
 pub fn main(init: process.Init) !void {
     const a = init.arena.allocator();
     const io = init.io;
+
+    try prof.profiler.init(a);
+    defer prof.profiler.deinit();
+
     const args = try init.minimal.args.toSlice(a);
     if (args.len != 3) {
         const usage =
@@ -42,8 +47,11 @@ pub fn main(init: process.Init) !void {
 
     const cwd = Io.Dir.cwd();
 
+    prof.profiler.beg("generate");
     const input = try types.Input.initRandom(a, size * 1_000, seed);
+    prof.profiler.end();
 
+    prof.profiler.beg("write");
     const outFileDirPath = "homework/part2/inputs";
     try cwd.createDirPath(io, outFileDirPath);
     const outFileDir = try cwd.openDir(io, outFileDirPath, .{});
@@ -59,6 +67,7 @@ pub fn main(init: process.Init) !void {
     try json.Stringify.value(input, .{ .whitespace = .indent_2 }, &outFileWriter.interface);
 
     try outFileWriter.flush();
+    prof.profiler.end();
 
     debug.print("seed:: {d}, size:: {d}\noutput:: {f}\n", .{ seed, size, input });
 }
